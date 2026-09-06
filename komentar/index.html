@@ -17,6 +17,7 @@
     }
     .comment-body {
       font-size: 15px;
+      white-space: pre-line;
     }
     .comment-meta {
       font-size: 13px;
@@ -42,42 +43,51 @@
   <!-- Bootstrap JS -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Ambil parameter dari URL
+    // URL tunggal Apps Script milikmu
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbfN5UwHfxvu1HVNwua3zd4grbCaItI_nQKO6w9hglkGjOdWMJ2qAatAPHmE9x0yjSIfawfg/exec";
+
+    // Ambil parameter pengantin dari URL (?pengantin=mukhlis-diana)
     function getQueryParam(key) {
       return new URLSearchParams(window.location.search).get(key);
     }
 
-    async function loadConfig(pengantin) {
-      try {
-        const res = await fetch("config.json"); // ambil file config dari GitHub Pages
-        const config = await res.json();
-        return config[pengantin] || null;
-      } catch (err) {
-        console.error("Gagal load config:", err);
-        return null;
-      }
+    // Fungsi Sanitisasi Teks
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.innerText = text || "";
+      return div.innerHTML;
     }
 
-    async function loadKomentar(pengantin, link) {
+    async function loadKomentar(weddingId) {
+      const container = document.getElementById("commentList");
       try {
-        const res = await fetch(link + "?action=get");
+        const res = await fetch(`${SCRIPT_URL}?action=get&wedding_id=${encodeURIComponent(weddingId)}`);
         const data = await res.json();
 
         let html = "";
-        if (data.length === 0) {
+        if (!Array.isArray(data) || data.length === 0) {
           html = `<div class="col-12 text-center text-muted">Belum ada komentar.</div>`;
         } else {
-          data.forEach((komen) => {
+          // Tampilkan dari yang paling baru
+          data.reverse().forEach((komen) => {
+            const formattedDate = komen.timestamp 
+              ? new Date(komen.timestamp).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
+              : "";
+
+            const attendanceBadge = komen.attendance === "Hadir" 
+              ? '<span class="badge bg-success">Hadir</span>' 
+              : '<span class="badge bg-danger">Tidak Hadir</span>';
+
             html += `
               <div class="col-12 col-md-8">
                 <div class="card comment-card">
                   <div class="card-body d-flex justify-content-between align-items-start">
-                    <div>
-                      <h6 class="card-title mb-1">${komen.name}</h6>
-                      <p class="card-text comment-body mb-1">${komen.message}</p>
-                      <p class="comment-meta mb-0">${komen.timestamp || ""}</p>
+                    <div class="pe-3">
+                      <h6 class="card-title mb-1 fw-bold">${escapeHtml(komen.name)} ${attendanceBadge}</h6>
+                      <p class="card-text comment-body mb-1">${escapeHtml(komen.message)}</p>
+                      <p class="comment-meta mb-0">${formattedDate}</p>
                     </div>
-                    <button class="btn btn-sm btn-danger delete-btn" onclick="hapusKomentar('${link}', '${komen.timestamp}')">
+                    <button class="btn btn-sm btn-outline-danger delete-btn" onclick="hapusKomentar('${weddingId}', '${komen.timestamp}', this)">
                       Hapus
                     </button>
                   </div>
@@ -86,42 +96,51 @@
             `;
           });
         }
-        document.getElementById("commentList").innerHTML = html;
+        container.innerHTML = html;
       } catch (err) {
-        document.getElementById("commentList").innerHTML =
-          `<div class="col-12 text-center text-danger">❌ Gagal ambil data.</div>`;
+        container.innerHTML = `<div class="col-12 text-center text-danger">❌ Gagal mengambil data ucapan.</div>`;
         console.error(err);
       }
     }
 
-    async function hapusKomentar(link, timestamp) {
-      if (!confirm("Yakin hapus komentar ini?")) return;
+    async function hapusKomentar(weddingId, timestamp, btn) {
+      if (!confirm("Yakin ingin menghapus komentar ini?")) return;
+
+      btn.disabled = true;
+      btn.innerText = "Menghapus...";
+
       try {
-        await fetch(link + "?action=delete&timestamp=" + encodeURIComponent(timestamp));
-        loadKomentar(getQueryParam("pengantin"), link); // refresh list
+        const res = await fetch(`${SCRIPT_URL}?action=delete&wedding_id=${encodeURIComponent(weddingId)}&timestamp=${encodeURIComponent(timestamp)}`);
+        const resultText = await res.text();
+
+        if (resultText.trim() === "Deleted") {
+          loadKomentar(weddingId); // Refresh daftar komentar
+        } else {
+          alert("Gagal menghapus komentar: " + resultText);
+          btn.disabled = false;
+          btn.innerText = "Hapus";
+        }
       } catch (err) {
-        alert("Gagal hapus komentar.");
+        alert("Terjadi kesalahan jaringan saat menghapus.");
+        btn.disabled = false;
+        btn.innerText = "Hapus";
+        console.error(err);
       }
     }
 
-    // Main
-    (async () => {
+    // Main Execution
+    document.addEventListener("DOMContentLoaded", () => {
       const pengantin = getQueryParam("pengantin");
+      
       if (!pengantin) {
         document.getElementById("commentList").innerHTML =
-          `<div class="col-12 text-center text-warning">⚠️ Nama pengantin tidak ditemukan di URL.</div>`;
+          `<div class="col-12 text-center text-warning">⚠️ Parameter pengantin tidak ditemukan pada URL (?pengantin=slug).</div>`;
         return;
       }
-      document.getElementById("pengantinLabel").textContent = pengantin;
 
-      const link = await loadConfig(pengantin);
-      if (!link) {
-        document.getElementById("commentList").innerHTML =
-          `<div class="col-12 text-center text-warning">⚠️ Link WebApp untuk pengantin ini belum diset di config.json</div>`;
-        return;
-      }
-      loadKomentar(pengantin, link);
-    })();
+      document.getElementById("pengantinLabel").textContent = pengantin;
+      loadKomentar(pengantin);
+    });
   </script>
 </body>
 </html>
